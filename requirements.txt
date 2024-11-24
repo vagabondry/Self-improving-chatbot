@@ -1,0 +1,10 @@
+flask
+gunicorn
+torch==2.0.1              # For PyTorch functionality
+transformers==4.31.0      # For GPT2 and Hugging Face utilities
+python-telegram-bot==20.3 # For Telegram bot functionalities
+gym==0.26.2              # For environment simulations
+numpy==1.24.3            # For numerical operations
+pandas==1.5.3            # For data manipulation and analysis
+tqdm==4.65.0             # For progress bars
+python-dotenv            # For sensitive information
