@@ -61,7 +61,7 @@ Create a .env file in the project root with the following keys:
 Variable	| Description
 --- | ---
 TELEGRAM_BOT_TOKEN	| Token for authenticating with the Telegram API.
-HF_API_KEY	| API key for Hugging Face inference.
+HF_API_KEY	| API key for Hugging Face updating the model.
 
 To avoid exposing sensitive credentials, these variables are stored in a ```.env``` file, which is excluded from version control.
 
