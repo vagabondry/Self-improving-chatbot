@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 from new_train_dataset import format_conversation
 
 # Load model and tokenizer
-model_path = "D:/Downloads/conversation-gpt2-with-emotions"
+model_path = "kkaterina/conversation-gpt2-with-emotions"
 tokenizer = GPT2Tokenizer.from_pretrained(model_path)
 model = GPT2LMHeadModel.from_pretrained(model_path)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -1,23 +1,22 @@
+import torch
+from transformers import GPT2Tokenizer, GPT2LMHeadModel, pipeline
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+import json
+from datetime import datetime
 import os
 import random
 import hashlib
-import json
-from datetime import datetime
-import torch
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
-from dotenv import load_dotenv
-
+import pandas as pd
 from environment import ChatbotEnv, ChatLogMonitor, FeedbackLogMonitor, ChatbotAgent
 
 
-# Load configuration
-model_path = "../model/conversation-gpt2-with-emotions"
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+model_path = "kkaterina/conversation-gpt2-with-emotions"
 
-# Load the tokenizer and model
+# Load the tokenizer
 tokenizer = GPT2Tokenizer.from_pretrained(model_path)
+
+# Load the fine-tuned GPT-2 model
 model = GPT2LMHeadModel.from_pretrained(model_path)
 
 # If you have a GPU, move the model to the device
@@ -30,6 +29,8 @@ chat_monitor = ChatLogMonitor()
 feedback_monitor = FeedbackLogMonitor()
 rl_env = ChatbotEnv(model, tokenizer, emotions, chat_monitor, feedback_monitor)
 agent = ChatbotAgent(rl_env)
+desired_labels = {'neutral', 'disapproval', 'caring', 'annoyance', 'anger', 'excitement', 'joy'}
+classifier = pipeline(task="text-classification", model="SamLowe/roberta-base-go_emotions", top_k=None, device=device)
 
 # Feedback context to match feedback to messages
 feedback_context = {}
@@ -47,14 +48,52 @@ def generate_response_via_rl(prompt, env, agent):
     selected_emotion, response, _ = env.step(action)  # Generate the response
     return response
 
+def generate_response_with_emotion(prompt, model, tokenizer, max_length=30, top_k=50):
+    model.eval()
+    prompt = f"{prompt}[SEP]"
+    input_ids = tokenizer.encode(prompt, return_tensors='pt').to(device)
+    with torch.no_grad():
+        output = model.generate(
+            input_ids=input_ids,
+            max_length=max_length,
+            do_sample=True,
+            top_k=top_k,
+            eos_token_id=tokenizer.eos_token_id,
+            no_repeat_ngram_size=3,
+            pad_token_id=tokenizer.pad_token_id,
+            num_return_sequences=1
+        )
+    decoded_output = tokenizer.decode(output[0], skip_special_tokens=False)
+
+    tokens_to_keep = ["[SEP]"]
+
+    filtered_output = " ".join([
+        token for token in decoded_output.split() 
+        if token not in tokenizer.all_special_tokens or token in tokens_to_keep
+    ])
+
+    return filtered_output.split("[SEP]")[1].strip()
+
+def analyse_sentiment(user_reply, classifier):
+    model_outputs = classifier(user_reply)
+    model_outputs = model_outputs[0]
+
+    filtered_outputs = [output for output in model_outputs if output['label'] in desired_labels]
+    
+    relevant_emotions = [output['label'].upper() for output in filtered_outputs if output['score'] > 0.2]
+    
+    if not relevant_emotions:
+        relevant_emotions = ["NEUTRAL"]
+    
+    # Combine emotion tokens with the formatted conversation
+    emotion_tokens = " ".join([f"[{emotion}]" for emotion in relevant_emotions])
+    return f"{emotion_tokens} {user_reply}"
 
 def log_message(message_data, chat_id):
-    """
-    Log user messages into chat logs.
-    """
     try:
-        os.makedirs("chat_logs", exist_ok=True)
-        file_name = f"chat_logs/chat_{chat_id}.json"
+        log_dir = "/app/chat_logs" 
+        os.makedirs(log_dir, exist_ok=True)
+        file_name = f"{log_dir}/chat_{chat_id}.json"
 
         if os.path.exists(file_name):
             with open(file_name, "r") as file:
@@ -63,20 +102,18 @@ def log_message(message_data, chat_id):
             logs = []
 
         logs.append(message_data)
+        print(message_data)
 
         with open(file_name, "w") as file:
             json.dump(logs, file, indent=4)
     except Exception as e:
         print(f"Error logging message for chat {chat_id}: {e}")
 
-
 def log_feedback(feedback_data, chat_id):
-    """
-    Log user feedback into feedback logs.
-    """
     try:
-        os.makedirs("feedback_logs", exist_ok=True)
-        file_name = f"feedback_logs/chat_{chat_id}_feedback.json"
+        feedback_dir = "/app/feedback_logs" 
+        os.makedirs(feedback_dir, exist_ok=True)
+        file_name = f"{feedback_dir}/chat_{chat_id}_feedback.json"
 
         if os.path.exists(file_name):
             with open(file_name, "r") as file:
@@ -85,33 +122,25 @@ def log_feedback(feedback_data, chat_id):
             logs = []
 
         logs.append(feedback_data)
+        print(feedback_data)
 
         with open(file_name, "w") as file:
             json.dump(logs, file, indent=4)
     except Exception as e:
         print(f"Error logging feedback for chat {chat_id}: {e}")
 
-
 async def start(update: Update, context):
-    """
-    Handle the /start command.
-    """
     if update.message.chat.type == "private":
         await update.message.reply_text("Hi! I'm your AI bot. Send me a message!")
     else:
         await update.message.reply_text("Hi! Add me to your group and mention me to interact.")
 
-
 async def chat(update: Update, context):
-    """
-    Handle user messages and generate a response using the RL environment.
-    """
     user_message = update.message.text
     chat_id = update.message.chat.id
     chat_type = update.message.chat.type
     bot_username = context.bot.username
 
-    # Log the user's message
     message_data = {
         "chat_id": chat_id,
         "user_id": update.message.from_user.id,
@@ -122,7 +151,6 @@ async def chat(update: Update, context):
     }
     log_message(message_data, chat_id)
 
-    # If in group chat, respond only if bot is mentioned
     if chat_type in ["group", "supergroup"]:
         if f"@{bot_username}" in user_message:
             user_message = user_message.replace(f"@{bot_username}", "").strip()
@@ -131,8 +159,9 @@ async def chat(update: Update, context):
                 return
 
     try:
-        # Generate a response using the RL environment
-        response = generate_response_via_rl(user_message, rl_env, agent)
+
+        #response = generate_response_via_rl(user_message, rl_env, agent)
+        response = generate_response_with_emotion(analyse_sentiment(user_message, classifier), model, tokenizer)
 
         feedback_id = hashlib.md5(f"{chat_id}:{user_message}:{response}".encode()).hexdigest()
         feedback_context[feedback_id] = {
@@ -142,7 +171,6 @@ async def chat(update: Update, context):
             "timestamp": datetime.now().isoformat(),
         }
 
-        # Attach feedback buttons to the response
         keyboard = [
             [
                 InlineKeyboardButton("Good 👍", callback_data=f"feedback:Good:{feedback_id}"),
@@ -155,11 +183,7 @@ async def chat(update: Update, context):
     except Exception as e:
         await update.message.reply_text(f"An error occurred: {e}")
 
-
 async def feedback_handler(update: Update, context):
-    """
-    Handle feedback provided by users on bot responses.
-    """
     query = update.callback_query
     await query.answer()
 
@@ -180,12 +204,12 @@ async def feedback_handler(update: Update, context):
         }
         log_feedback(feedback_entry, feedback_data["chat_id"])
 
-        # Remove feedback buttons after submission
         await query.edit_message_reply_markup(reply_markup=None)
 
+BOT_TOKEN = "7757297121:AAE-1Ny0XVNkJrwfsO1uoT7_WMJT-v3J-2E"
 
-# Telegram Bot Initialization
 app = ApplicationBuilder().token(BOT_TOKEN).build()
+
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 app.add_handler(CallbackQueryHandler(feedback_handler))
