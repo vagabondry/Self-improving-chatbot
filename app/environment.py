@@ -1,18 +1,19 @@
 import os
 import json
 import numpy as np
-import pandas as pd
 import torch
 import gym
+from datetime import datetime
+from DQN import DQNAgent
 from transformers import GPT2Tokenizer, GPT2LMHeadModel, pipeline
 from tqdm import tqdm
 from torch.utils.data import Dataset
 from new_train_dataset import format_conversation
 
 # Load model and tokenizer
-model_path = "D:/Downloads/conversation-gpt2-with-emotions"
-tokenizer = GPT2Tokenizer.from_pretrained(model_path)
-model = GPT2LMHeadModel.from_pretrained(model_path)
+model_path = "kkaterina/conversation-gpt2-with-emotions"
+tokenizer = GPT2Tokenizer.from_pretrained(repo_name=model_path)
+model = GPT2LMHeadModel.from_pretrained(repo_name=model_path)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = model.to(device)
 
@@ -63,7 +64,7 @@ def match_user_replies_with_responses(chat_logs, feedback_logs):
         closest_feedback = min(
             feedback_logs,
             key=lambda fb: abs(
-                (pd.to_datetime(fb["timestamp"]) - pd.to_datetime(user_message["timestamp"])).total_seconds()
+                (datetime.fromisoformat(fb["timestamp"]) - datetime.fromisoformat(user_message["timestamp"])).total_seconds()
             ),
         )
         matched_data.append(
@@ -170,86 +171,36 @@ class ChatbotEnv:
             )
             bot_reply = feedback_entry["bot_response"] if feedback_entry else ""
             reaction = feedback_entry["feedback"] if feedback_entry else "neutral"
-            state_text = f"{user_input} [SEP] {bot_reply} [SEP] {reaction}"
-            self.state = self.tokenizer(state_text, return_tensors="pt")
+
+            input_ids = self.tokenizer.encode(user_input, return_tensors="pt").to(device)
+            reply_ids = self.tokenizer.encode(bot_reply, return_tensors="pt").to(device)
+
+            self.state = torch.cat((input_ids.mean(1), reply_ids.mean(1)), dim=-1).squeeze().cpu().numpy()
             return self.state
 
     def step(self, action):
-        self.reset()
-        user_input = self.state.split("[SEP]")[0]
-        # print(user_input)
-        # user_input = self.state 
+        user_input = self.state[:len(self.state) // 2]  
         responses = generate_responses_with_emotions(user_input, self.emotions, self.model, self.tokenizer)
-        selected_emotion, selected_response = responses[action]
-        # reward = self.calculate_reward(self.state.split("[SEP]")[2], analyze_sentiment(selected_response))  # Combine with feedback if available
-        reward = self.calculate_reward("good", analyze_sentiment(selected_response))  # Combine with feedback if available
-        return selected_emotion, selected_response, reward
-    
-    def calculate_reward(self, feedback, sentiment_score):
-        # Assign reward based on explicit feedback and inferred sentiment
-        reward = 0
 
-        # Explicit feedback
+        selected_emotion, selected_response = responses[action]
+        sentiment_score = analyze_sentiment(selected_response)
+        reward = self.calculate_reward("good", sentiment_score) # dummy calculation
+
+        response_ids = self.tokenizer.encode(selected_response, return_tensors="pt").to(device)
+        next_state = torch.cat((user_input, response_ids.mean(1).cpu()), dim=-1).numpy()
+
+        done = True  
+        return next_state, reward, done
+
+    def calculate_reward(self, feedback, sentiment_score):
+        reward = 0
         if feedback.lower() == "good":
             reward += 1
         elif feedback.lower() == "bad":
             reward -= 1
-
         reward += sentiment_score
-
         return reward
 
-## Agent ##
-class ChatbotAgent:
-    def __init__(self, env, alpha=0.1, gamma=0.9, epsilon=1.0, epsilon_decay=0.995):
-        self.env = env
-        self.q_table = {}
-        self.alpha = alpha
-        self.gamma = gamma
-        self.epsilon = epsilon
-        self.epsilon_decay = epsilon_decay
-
-    def get_state_key(self, state):
-        # Convert state to a hashable key for the Q-table
-        return tuple(state.numpy())
-
-    def choose_action(self, state):
-        if np.random.rand() < self.epsilon:
-            return self.env.action_space.sample()  # Explore
-        state_key = self.get_state_key(state)
-        return np.argmax(self.q_table.get(state_key, [0] * self.env.action_space.n))  # Exploit
-
-    def train(self, episodes=100):
-        for episode in range(episodes):
-            # Use the current index for training on sequential JSON entries
-            for i in range(len(self.env.conversation_data)):
-                state = self.env.reset(index=i)
-                total_reward = 0
-
-                while True:
-                    state_key = self.get_state_key(state)
-                    if state_key not in self.q_table:
-                        self.q_table[state_key] = [0] * self.env.action_space.n  # Initialize Q-values
-
-                    action = self.choose_action(state)
-                    next_state, reward, done, info = self.env.step(action)
-                    total_reward += reward
-
-                    # Update Q-value using Q-learning
-                    next_state_key = self.get_state_key(next_state)
-                    future_rewards = max(self.q_table.get(next_state_key, [0] * self.env.action_space.n))
-                    self.q_table[state_key][action] += self.alpha * (
-                        reward + self.gamma * future_rewards - self.q_table[state_key][action]
-                    )
-
-                    state = next_state
-
-                    if done:
-                        break
-
-            # Decay exploration rate
-            self.epsilon = max(0.1, self.epsilon * self.epsilon_decay)
-            print(f"Episode {episode + 1}/{episodes} | Total Reward: {total_reward}")
 
 ### Main Execution ###
 
@@ -258,5 +209,7 @@ if __name__ == "__main__":
     feedback_monitor = FeedbackLogMonitor()
     env = ChatbotEnv(model, tokenizer, emotions, chat_monitor, feedback_monitor)
     # Add RL Agent and Training Logic
-    agent = ChatbotAgent(env)
-    agent.train(episodes=10)
+    state_size = 512  
+    action_size = len(emotions)
+    agent = DQNAgent(state_size, action_size)
+    agent.train(env=env, agent=agent, episodes=10)
