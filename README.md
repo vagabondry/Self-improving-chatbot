@@ -10,8 +10,8 @@ This project is a Telegram chatbot powered by GPT-2, fine-tuned for conversation
 │   ├── bot.py             # Main script for Telegram bot 
 │   ├── environment.py     # Reinforcement Learning Environment and Agent
 │   ├── new_train_data.py  # Script to preprocess and format new training data (optional)
-├── model/
-│   └── conversation-gpt2-with-emotions/  # Pre-trained and fine-tuned model files 
+    ├── chat_logs          # Directory where chat data is stored (example of data is in repo)
+    ├── feedback_logs      # Directory where user feedback to responses is stored (example of data is in repo)
 ├── dataset/
 │   └── casual_data_windows.csv  # Dataset used for fine-tuning GPT-2
 ├── training/
@@ -77,7 +77,10 @@ To avoid exposing sensitive credentials, these variables are stored in a ```.env
 
   Run the container, passing the environment variables:
   ```bash
-  docker run -p 8080:8080 --env-file .env telegram-chatbot
+  docker run --name telegram-chatbot-container -p 8080:8080 --env-file .env \
+    -v /path/to/host/chat_logs:/app/chat_logs \
+    -v /path/to/host/feedback_logs:/app/feedback_logs \
+    telegram-chatbot
   ```
 
 ## License
