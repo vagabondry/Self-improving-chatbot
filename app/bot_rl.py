@@ -160,8 +160,8 @@ async def chat(update: Update, context):
 
     try:
 
-        #response = generate_response_via_rl(user_message, rl_env, agent)
-        response = generate_response_with_emotion(analyse_sentiment(user_message, classifier), model, tokenizer)
+        response = generate_response_via_rl(user_message, rl_env, agent)
+        
 
         feedback_id = hashlib.md5(f"{chat_id}:{user_message}:{response}".encode()).hexdigest()
         feedback_context[feedback_id] = {
@@ -206,7 +206,7 @@ async def feedback_handler(update: Update, context):
 
         await query.edit_message_reply_markup(reply_markup=None)
 
-BOT_TOKEN = "7757297121:AAE-1Ny0XVNkJrwfsO1uoT7_WMJT-v3J-2E"
+BOT_TOKEN = "bot_token"
 
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
